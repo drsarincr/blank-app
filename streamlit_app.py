@@ -8,8 +8,10 @@ from langchain_core.prompts import PromptTemplate
 from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline
 
-# Load HR Policy file
-DATA_PATH = "HR Policy"
+# =========================================
+# 1. Load HR Policy file
+# =========================================
+DATA_PATH = "HR Policy"   # adjust if file is HR Policy.txt
 try:
     loader = TextLoader(DATA_PATH)
     documents = loader.load()
@@ -20,7 +22,9 @@ except Exception:
         metadata={"source": "demo"}
     )]
 
-# Split + Embed
+# =========================================
+# 2. Split + Embed
+# =========================================
 splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
 docs = splitter.split_documents(documents)
 docs = [d for d in docs if d.page_content.strip() != ""]
@@ -29,7 +33,9 @@ embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-
 vectorstore = FAISS.from_documents(docs, embeddings)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-# LLM
+# =========================================
+# 3. LLM (Hugging Face, CPU-friendly)
+# =========================================
 generator = pipeline("text-generation", model="EleutherAI/gpt-neo-125M")
 llm = HuggingFacePipeline(pipeline=generator)
 
@@ -39,8 +45,8 @@ prompt = PromptTemplate(
 You are an HR assistant.
 
 Answer the question based ONLY on the context below.
-- Write a clear, short summary (2–3 sentences).
-- Do not repeat or list the context.
+- Summarize clearly in 2–3 sentences.
+- Do not repeat the context verbatim.
 - If the answer is not in the context, reply exactly: "Not found in HR policy."
 
 Context:
@@ -61,14 +67,19 @@ qa_chain = RetrievalQA.from_chain_type(
     return_source_documents=True
 )
 
-# Guard function
+# =========================================
+# 4. Guard function
+# =========================================
 def clean_answer(question, result):
     answer = result.strip()
-    if len(answer.split()) > 80 or not any(word.lower() in answer.lower() for word in question.split()[:3]):
+    # Only block if empty or clearly irrelevant
+    if not answer or answer.lower().startswith("context") or answer.lower().startswith("you are an hr assistant"):
         return "Not found in HR policy."
     return answer
 
-# Streamlit UI
+# =========================================
+# 5. Streamlit UI
+# =========================================
 st.title("🤖 HR Chatbot")
 
 user_input = st.text_input("Ask a question about HR policy:")
