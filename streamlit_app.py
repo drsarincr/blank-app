@@ -1,74 +1,27 @@
 import streamlit as st
 import os
-import subprocess
-import time
-import requests
 
 from langchain_community.document_loaders import (
     DirectoryLoader, TextLoader, PyMuPDFLoader,
-    Docx2txtLoader, UnstructuredPDFLoader
+    Docx2txtLoader
 )
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
-from langchain_ollama import OllamaLLM
+from langchain_community.llms import HuggingFaceHub
 
 
 # =========================================
-# 1. TRY START OLLAMA
-# =========================================
-def start_ollama():
-    try:
-        subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        time.sleep(3)
-    except:
-        pass
-
-
-def check_ollama():
-    try:
-        requests.get("http://localhost:11434", timeout=2)
-        return True
-    except:
-        return False
-
-
-start_ollama()
-
-
-# =========================================
-# 2. UI
+# 1. UI
 # =========================================
 st.set_page_config(page_title="HR Chatbot", layout="centered")
-st.title("🤖 HR Chatbot (Local LLM: Ollama/Qwen)")
+st.title("🤖 HR Chatbot (Deployable Version)")
 
 
 # =========================================
-# 3. CHECK OLLAMA
-# =========================================
-if not check_ollama():
-    st.error("❌ Local LLM not available (Ollama not running).")
-    st.info("👉 This environment does not support local models.\n\nRun locally for full functionality.")
-    st.stop()
-
-
-# =========================================
-# 4. MODEL SELECTION
-# =========================================
-model_name = st.selectbox(
-    "Select local model",
-    ["qwen:7b", "llama3.2"]
-)
-
-
-# =========================================
-# 5. DATA PATH (AUTO)
+# 2. DATA PATH
 # =========================================
 DATA_PATH = "HR Policy"
 
@@ -76,11 +29,9 @@ if not os.path.exists(DATA_PATH):
     st.error("❌ 'HR Policy' folder not found")
     st.stop()
 
-st.success(f"📂 Using: {DATA_PATH}")
-
 
 # =========================================
-# 6. LOAD DOCUMENTS
+# 3. LOAD DATA
 # =========================================
 @st.cache_resource
 def load_data(path):
@@ -95,19 +46,23 @@ def load_data(path):
     try:
         docs = DirectoryLoader(path, glob="**/*.txt", loader_cls=TextLoader).load()
         documents.extend(add_meta(docs, "txt"))
-    except: pass
+    except:
+        pass
 
     try:
         docs = DirectoryLoader(path, glob="**/*.docx", loader_cls=Docx2txtLoader).load()
         documents.extend(add_meta(docs, "docx"))
-    except: pass
+    except:
+        pass
 
     try:
         docs = DirectoryLoader(path, glob="**/*.pdf", loader_cls=PyMuPDFLoader).load()
         documents.extend(add_meta(docs, "pdf"))
-    except: pass
+    except:
+        pass
 
-    if not documents:
+    # fallback
+    if len(documents) == 0:
         from langchain_core.documents import Document
         documents = [Document(
             page_content="Employees get 20 days leave. Notice period is 30 days.",
@@ -124,20 +79,33 @@ def load_data(path):
     return FAISS.from_documents(docs, embeddings)
 
 
+vectorstore = load_data(DATA_PATH)
+
+
 # =========================================
-# 7. BUILD CHAIN
+# 4. LLM (CLOUD)
 # =========================================
-def build_chain(vectorstore, model):
+token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN")
 
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+if not token:
+    st.error("❌ Add HuggingFace token in Streamlit Secrets")
+    st.stop()
 
-    llm = OllamaLLM(model=model)
+llm = HuggingFaceHub(
+    repo_id="google/flan-t5-base",
+    huggingfacehub_api_token=token,
+    model_kwargs={"temperature": 0}
+)
 
-    prompt = PromptTemplate(
-        template="""
+
+# =========================================
+# 5. PROMPT
+# =========================================
+prompt = PromptTemplate(
+    template="""
 You are an HR assistant.
 
-Answer ONLY from context.
+Answer ONLY from the context.
 If not found, say: "Not found in HR policy."
 
 Context:
@@ -148,43 +116,32 @@ Question:
 
 Answer:
 """,
-        input_variables=["context", "question"]
-    )
-
-    return RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-        chain_type_kwargs={"prompt": prompt},
-        return_source_documents=True
-    )
+    input_variables=["context", "question"]
+)
 
 
 # =========================================
-# 8. INIT
+# 6. CHAIN
 # =========================================
-with st.spinner("📚 Loading documents..."):
-    vectorstore = load_data(DATA_PATH)
-
-qa_chain = build_chain(vectorstore, model_name)
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
+    chain_type_kwargs={"prompt": prompt},
+    return_source_documents=True
+)
 
 
 # =========================================
-# 9. CHAT
+# 7. CHAT
 # =========================================
 query = st.text_input("Ask your HR question:")
 
 if query:
-    with st.spinner("🤖 Thinking..."):
-        try:
-            res = qa_chain.invoke({"query": query})
+    res = qa_chain.invoke({"query": query})
 
-            st.markdown("### 🧠 Answer")
-            st.write(res["result"])
+    st.markdown("### 🧠 Answer")
+    st.write(res["result"])
 
-            st.markdown("### 📄 Sources")
-            for d in res["source_documents"]:
-                st.write("-", d.metadata.get("source"))
-
-        except Exception as e:
-            st.error("❌ Failed to get response from model")
-            st.exception(e)
+    st.markdown("### 📄 Sources")
+    for d in res["source_documents"]:
+        st.write("-", d.metadata.get("source"))
