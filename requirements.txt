@@ -5,6 +5,7 @@ langchain-core
 langchain-text-splitters
 langchain-classic
 langchain-ollama
+transformers
 sentence-transformers
 faiss-cpu
 pymupdf
