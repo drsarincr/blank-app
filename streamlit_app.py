@@ -1,49 +1,21 @@
 import streamlit as st
-import os
-from langchain_community.document_loaders import (
-    DirectoryLoader, TextLoader, PyMuPDFLoader,
-    Docx2txtLoader, UnstructuredPDFLoader
-)
+from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
-from langchain_ollama import OllamaLLM
+from langchain_community.llms import HuggingFacePipeline
+from transformers import pipeline
 
 # =========================================
-# 1. Load HR Documents
+# 1. Load HR Policy file
 # =========================================
-DATA_PATH = "HR_Policy"  # folder in your repo with HR docs
-
-documents = []
-def add_meta(docs, tag):
-    for d in docs:
-        d.metadata["source"] = d.metadata.get("source", tag)
-    return docs
-
+DATA_PATH = "HR Policy"   # adjust if file is HR Policy.txt
 try:
-    docs = DirectoryLoader(DATA_PATH, glob="**/*.txt", loader_cls=TextLoader).load()
-    documents.extend(add_meta(docs, "txt"))
-except: pass
-
-try:
-    docs = DirectoryLoader(DATA_PATH, glob="**/*.docx", loader_cls=Docx2txtLoader).load()
-    documents.extend(add_meta(docs, "docx"))
-except: pass
-
-try:
-    docs = DirectoryLoader(DATA_PATH, glob="**/*.pdf", loader_cls=PyMuPDFLoader).load()
-    documents.extend(add_meta(docs, "pdf_fast"))
-except: pass
-
-try:
-    docs = DirectoryLoader(DATA_PATH, glob="**/*.pdf", loader_cls=UnstructuredPDFLoader).load()
-    documents.extend(add_meta(docs, "pdf_ocr"))
-except: pass
-
-# Fallback demo data
-if len(documents) == 0:
+    loader = TextLoader(DATA_PATH)
+    documents = loader.load()
+except Exception as e:
     from langchain_core.documents import Document
     documents = [Document(
         page_content="Employees get 20 days leave. Notice period is 30 days.",
@@ -62,9 +34,10 @@ vectorstore = FAISS.from_documents(docs, embeddings)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
 # =========================================
-# 3. LLM + Prompt
+# 3. LLM (Hugging Face, CPU-friendly)
 # =========================================
-llm = OllamaLLM(model="llama3.2")
+generator = pipeline("text-generation", model="EleutherAI/gpt-neo-125M")
+llm = HuggingFacePipeline(pipeline=generator)
 
 prompt = PromptTemplate(
     template="""
