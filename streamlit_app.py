@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import subprocess
-import threading
 import time
 import requests
 
@@ -18,16 +17,19 @@ from langchain_ollama import OllamaLLM
 
 
 # =========================================
-# 1. TRY START OLLAMA (BEST EFFORT)
+# 1. TRY START OLLAMA
 # =========================================
 def start_ollama():
     try:
-        subprocess.Popen(["ollama", "serve"],
-                         stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL)
+        subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
         time.sleep(3)
     except:
         pass
+
 
 def check_ollama():
     try:
@@ -36,33 +38,49 @@ def check_ollama():
     except:
         return False
 
+
 start_ollama()
 
 
 # =========================================
 # 2. UI
 # =========================================
-st.title("🤖 HR Chatbot")
+st.set_page_config(page_title="HR Chatbot", layout="centered")
+st.title("🤖 HR Chatbot (Local LLM: Ollama/Qwen)")
 
+
+# =========================================
+# 3. CHECK OLLAMA
+# =========================================
 if not check_ollama():
-    st.error("❌ Ollama not running. This app requires local execution.")
+    st.error("❌ Local LLM not available (Ollama not running).")
+    st.info("👉 This environment does not support local models.\n\nRun locally for full functionality.")
     st.stop()
 
 
 # =========================================
-# 3. DATA PATH (AUTO)
+# 4. MODEL SELECTION
+# =========================================
+model_name = st.selectbox(
+    "Select local model",
+    ["qwen:7b", "llama3.2"]
+)
+
+
+# =========================================
+# 5. DATA PATH (AUTO)
 # =========================================
 DATA_PATH = "HR Policy"
 
 if not os.path.exists(DATA_PATH):
-    st.error("❌ HR Policy folder not found")
+    st.error("❌ 'HR Policy' folder not found")
     st.stop()
 
 st.success(f"📂 Using: {DATA_PATH}")
 
 
 # =========================================
-# 4. LOAD DOCUMENTS
+# 6. LOAD DOCUMENTS
 # =========================================
 @st.cache_resource
 def load_data(path):
@@ -103,18 +121,17 @@ def load_data(path):
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
-    vectorstore = FAISS.from_documents(docs, embeddings)
-    return vectorstore
+    return FAISS.from_documents(docs, embeddings)
 
 
 # =========================================
-# 5. BUILD CHAIN
+# 7. BUILD CHAIN
 # =========================================
-def build_chain(vectorstore):
+def build_chain(vectorstore, model):
 
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-    llm = OllamaLLM(model="llama3.2")
+    llm = OllamaLLM(model=model)
 
     prompt = PromptTemplate(
         template="""
@@ -143,26 +160,31 @@ Answer:
 
 
 # =========================================
-# 6. INIT
+# 8. INIT
 # =========================================
-with st.spinner("📚 Loading data..."):
+with st.spinner("📚 Loading documents..."):
     vectorstore = load_data(DATA_PATH)
 
-qa_chain = build_chain(vectorstore)
+qa_chain = build_chain(vectorstore, model_name)
 
 
 # =========================================
-# 7. CHAT UI
+# 9. CHAT
 # =========================================
-query = st.text_input("Ask HR question:")
+query = st.text_input("Ask your HR question:")
 
 if query:
     with st.spinner("🤖 Thinking..."):
-        res = qa_chain.invoke({"query": query})
+        try:
+            res = qa_chain.invoke({"query": query})
 
-    st.write("### 🧠 Answer")
-    st.write(res["result"])
+            st.markdown("### 🧠 Answer")
+            st.write(res["result"])
 
-    st.write("### 📄 Sources")
-    for d in res["source_documents"]:
-        st.write("-", d.metadata.get("source"))
+            st.markdown("### 📄 Sources")
+            for d in res["source_documents"]:
+                st.write("-", d.metadata.get("source"))
+
+        except Exception as e:
+            st.error("❌ Failed to get response from model")
+            st.exception(e)
