@@ -1,8 +1,5 @@
 import streamlit as st
 import os
-import subprocess
-import threading
-import time
 import requests
 
 from langchain_community.document_loaders import (
@@ -17,24 +14,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_ollama import OllamaLLM
 
 # =========================================
-# 1. START OLLAMA (LOCAL)
-# =========================================
-def run_ollama():
-    subprocess.Popen(
-        ["ollama", "serve"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-
-@st.cache_resource
-def start_ollama():
-    threading.Thread(target=run_ollama, daemon=True).start()
-    time.sleep(5)
-
-start_ollama()
-
-# =========================================
-# 2. CHECK OLLAMA
+# 1. CHECK OLLAMA (NO AUTO-START ❗)
 # =========================================
 def check_ollama():
     try:
@@ -44,12 +24,16 @@ def check_ollama():
         return False
 
 # =========================================
-# 3. UI
+# 2. UI
 # =========================================
 st.title("🤖 HR Chatbot (Ollama - Local Only)")
 
+if not check_ollama():
+    st.error("❌ Ollama is not running.\n\n👉 Run in terminal:\n\nollama serve")
+    st.stop()
+
 # =========================================
-# 4. AUTO DATA PATH
+# 3. DATA PATH (AUTO)
 # =========================================
 DATA_PATH = "HR Policy"
 
@@ -60,7 +44,7 @@ else:
     st.success(f"📂 Using data from: {DATA_PATH}")
 
 # =========================================
-# 5. LOAD DOCUMENTS + VECTORSTORE (CACHED)
+# 4. LOAD DOCUMENTS + VECTORSTORE
 # =========================================
 @st.cache_resource
 def load_vectorstore(path):
@@ -100,7 +84,7 @@ def load_vectorstore(path):
     except:
         pass
 
-    # Fallback
+    # Fallback if no files found
     if len(documents) == 0:
         from langchain_core.documents import Document
         documents = [Document(
@@ -113,7 +97,6 @@ def load_vectorstore(path):
         chunk_size=500,
         chunk_overlap=100
     )
-
     docs = splitter.split_documents(documents)
     docs = [d for d in docs if d.page_content.strip() != ""]
 
@@ -127,13 +110,9 @@ def load_vectorstore(path):
     return vectorstore
 
 # =========================================
-# 6. BUILD QA CHAIN (NO CACHE ❗)
+# 5. BUILD QA CHAIN (NO CACHE ❗)
 # =========================================
 def build_chain(vectorstore):
-
-    if not check_ollama():
-        st.error("❌ Ollama is not running.\n\nRun:\n\nollama serve")
-        st.stop()
 
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
@@ -168,7 +147,7 @@ Answer:
     return qa_chain
 
 # =========================================
-# 7. LOAD SYSTEM
+# 6. LOAD SYSTEM
 # =========================================
 with st.spinner("📚 Loading HR documents..."):
     vectorstore = load_vectorstore(DATA_PATH)
@@ -176,7 +155,7 @@ with st.spinner("📚 Loading HR documents..."):
 qa_chain = build_chain(vectorstore)
 
 # =========================================
-# 8. CHAT UI
+# 7. CHAT UI
 # =========================================
 user_query = st.text_input("Ask your HR question:")
 
