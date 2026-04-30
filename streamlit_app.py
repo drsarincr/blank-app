@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import requests
 
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -8,35 +7,16 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
-
-# LLM विकल्प
-from langchain_community.llms import Ollama
 from langchain_community.llms import HuggingFaceHub
 
-
 # =========================================
-# 0. Check if Ollama is running
-# =========================================
-def ollama_available():
-    try:
-        requests.get("http://localhost:11434", timeout=2)
-        return True
-    except:
-        return False
-
-
-# =========================================
-# 1. Load HR Policy file
+# 1. Load HR Policy
 # =========================================
 DATA_PATH = "HR Policy.txt"
 
 try:
-    if not os.path.exists(DATA_PATH):
-        raise FileNotFoundError("HR Policy file not found")
-
     loader = TextLoader(DATA_PATH, encoding="utf-8")
     documents = loader.load()
-
 except Exception:
     from langchain_core.documents import Document
     documents = [Document(
@@ -63,23 +43,14 @@ vectorstore = FAISS.from_documents(docs, embeddings)
 
 retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
-
 # =========================================
-# 3. LLM Selection (AUTO SWITCH)
+# 3. LLM (HuggingFace Cloud)
 # =========================================
-if ollama_available():
-    llm = Ollama(
-        model="llama3",
-        temperature=0
-    )
-    st.success("🟢 Using Ollama (local)")
-else:
-    llm = HuggingFaceHub(
-        repo_id="google/flan-t5-base",
-        model_kwargs={"temperature": 0}
-    )
-    st.warning("🟡 Ollama not found → using cloud model")
-
+llm = HuggingFaceHub(
+    repo_id="google/flan-t5-base",
+    huggingfacehub_api_token=st.secrets["HUGGINGFACEHUB_API_TOKEN"],
+    model_kwargs={"temperature": 0}
+)
 
 # =========================================
 # 4. Prompt
@@ -104,7 +75,6 @@ Final Answer:
     input_variables=["context", "question"]
 )
 
-
 # =========================================
 # 5. QA Chain
 # =========================================
@@ -116,9 +86,8 @@ qa_chain = RetrievalQA.from_chain_type(
     return_source_documents=True
 )
 
-
 # =========================================
-# 6. Guard function
+# 6. Guard
 # =========================================
 def clean_answer(result):
     answer = result.strip()
@@ -131,7 +100,6 @@ def clean_answer(result):
 
     return answer
 
-
 # =========================================
 # 7. UI
 # =========================================
@@ -141,7 +109,7 @@ user_input = st.text_input("Ask a question about HR policy:")
 
 if user_input:
     try:
-        res = qa_chain.invoke({"query": user_input})  # ✅ correct key
+        res = qa_chain.invoke({"query": user_input})
 
         answer = clean_answer(res["result"])
 
@@ -153,5 +121,5 @@ if user_input:
             st.write("-", d.metadata.get("source", "HR Policy"))
 
     except Exception as e:
-        st.error("❌ LLM connection failed. Check Ollama or API setup.")
+        st.error("Error generating response")
         st.exception(e)
