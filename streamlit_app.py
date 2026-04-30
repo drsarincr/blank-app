@@ -15,14 +15,15 @@ from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_ollama import OllamaLLM
 
-
 # =========================================
 # 1. START OLLAMA (LOCAL)
 # =========================================
 def run_ollama():
-    subprocess.Popen(["ollama", "serve"],
-                     stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL)
+    subprocess.Popen(
+        ["ollama", "serve"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
 
 @st.cache_resource
 def start_ollama():
@@ -31,17 +32,21 @@ def start_ollama():
 
 start_ollama()
 
+# =========================================
+# 2. AUTO DATA PATH (NO INPUT)
+# =========================================
+DATA_PATH = "HR Policy"
 
-# =========================================
-# 2. UI INPUT
-# =========================================
 st.title("🤖 HR Chatbot (Ollama - Local Only)")
 
-DATA_PATH = st.text_input("📁 Enter folder path (e.g. /Users/you/HR Policy):")
-
+if not os.path.exists(DATA_PATH):
+    st.error("❌ 'HR Policy' folder not found in project")
+    st.stop()
+else:
+    st.success(f"📂 Using data from: {DATA_PATH}")
 
 # =========================================
-# 3. LOAD + PROCESS DOCUMENTS
+# 3. LOAD DOCUMENTS
 # =========================================
 @st.cache_resource
 def load_vectorstore(path):
@@ -81,7 +86,7 @@ def load_vectorstore(path):
     except:
         pass
 
-    # Fallback
+    # Fallback if nothing loaded
     if len(documents) == 0:
         from langchain_core.documents import Document
         documents = [Document(
@@ -90,7 +95,11 @@ def load_vectorstore(path):
         )]
 
     # Split
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=100
+    )
+
     docs = splitter.split_documents(documents)
     docs = [d for d in docs if d.page_content.strip() != ""]
 
@@ -102,7 +111,6 @@ def load_vectorstore(path):
     vectorstore = FAISS.from_documents(docs, embeddings)
 
     return vectorstore
-
 
 # =========================================
 # 4. BUILD QA CHAIN
@@ -142,30 +150,26 @@ Answer:
 
     return qa_chain
 
+# =========================================
+# 5. LOAD SYSTEM
+# =========================================
+with st.spinner("📚 Loading HR documents..."):
+    vectorstore = load_vectorstore(DATA_PATH)
+
+qa_chain = build_chain(vectorstore)
 
 # =========================================
-# 5. MAIN LOGIC
+# 6. CHAT UI
 # =========================================
-if DATA_PATH:
+user_query = st.text_input("Ask your HR question:")
 
-    if not os.path.exists(DATA_PATH):
-        st.error("❌ Path not found")
-        st.stop()
+if user_query:
+    with st.spinner("🤖 Thinking..."):
+        res = qa_chain.invoke({"query": user_query})
 
-    with st.spinner("📚 Loading documents..."):
-        vectorstore = load_vectorstore(DATA_PATH)
+    st.markdown("### 🧠 Answer")
+    st.write(res["result"])
 
-    qa_chain = build_chain(vectorstore)
-
-    user_query = st.text_input("Ask your HR question:")
-
-    if user_query:
-        with st.spinner("🤖 Thinking..."):
-            res = qa_chain.invoke({"query": user_query})
-
-        st.markdown("### 🧠 Answer")
-        st.write(res["result"])
-
-        st.markdown("### 📄 Sources")
-        for d in res["source_documents"]:
-            st.write("-", d.metadata.get("source"))
+    st.markdown("### 📄 Sources")
+    for d in res["source_documents"]:
+        st.write("-", d.metadata.get("source", "HR Policy"))
