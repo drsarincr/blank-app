@@ -33,11 +33,14 @@ def start_ollama():
 start_ollama()
 
 # =========================================
-# 2. AUTO DATA PATH (NO INPUT)
+# 2. UI TITLE
+# =========================================
+st.title("🤖 HR Chatbot (Ollama - Local Only)")
+
+# =========================================
+# 3. AUTO DATA PATH
 # =========================================
 DATA_PATH = "HR Policy"
-
-st.title("🤖 HR Chatbot (Ollama - Local Only)")
 
 if not os.path.exists(DATA_PATH):
     st.error("❌ 'HR Policy' folder not found in project")
@@ -46,7 +49,7 @@ else:
     st.success(f"📂 Using data from: {DATA_PATH}")
 
 # =========================================
-# 3. LOAD DOCUMENTS
+# 4. LOAD + VECTOR STORE (CACHED)
 # =========================================
 @st.cache_resource
 def load_vectorstore(path):
@@ -86,7 +89,7 @@ def load_vectorstore(path):
     except:
         pass
 
-    # Fallback if nothing loaded
+    # Fallback if no docs found
     if len(documents) == 0:
         from langchain_core.documents import Document
         documents = [Document(
@@ -99,7 +102,6 @@ def load_vectorstore(path):
         chunk_size=500,
         chunk_overlap=100
     )
-
     docs = splitter.split_documents(documents)
     docs = [d for d in docs if d.page_content.strip() != ""]
 
@@ -113,9 +115,8 @@ def load_vectorstore(path):
     return vectorstore
 
 # =========================================
-# 4. BUILD QA CHAIN
+# 5. BUILD QA CHAIN (NO CACHE ❗)
 # =========================================
-@st.cache_resource
 def build_chain(vectorstore):
 
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
@@ -151,7 +152,7 @@ Answer:
     return qa_chain
 
 # =========================================
-# 5. LOAD SYSTEM
+# 6. LOAD SYSTEM
 # =========================================
 with st.spinner("📚 Loading HR documents..."):
     vectorstore = load_vectorstore(DATA_PATH)
@@ -159,7 +160,7 @@ with st.spinner("📚 Loading HR documents..."):
 qa_chain = build_chain(vectorstore)
 
 # =========================================
-# 6. CHAT UI
+# 7. CHAT UI
 # =========================================
 user_query = st.text_input("Ask your HR question:")
 
