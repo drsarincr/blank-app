@@ -13,38 +13,52 @@ from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_ollama import OllamaLLM
 
+
 # =========================================
-# 1. CHECK OLLAMA (NO AUTO-START ❗)
+# 1. CHECK OLLAMA
 # =========================================
 def check_ollama():
     try:
-        requests.get("http://localhost:11434", timeout=2)
-        return True
+        res = requests.get("http://localhost:11434", timeout=2)
+        return res.status_code == 200
     except:
         return False
+
 
 # =========================================
 # 2. UI
 # =========================================
+st.set_page_config(page_title="HR Chatbot", layout="centered")
 st.title("🤖 HR Chatbot (Ollama - Local Only)")
 
-if not check_ollama():
-    st.error("❌ Ollama is not running.\n\n👉 Run in terminal:\n\nollama serve")
-    st.stop()
 
 # =========================================
-# 3. DATA PATH (AUTO)
+# 3. CHECK OLLAMA STATUS
+# =========================================
+if not check_ollama():
+    st.error("❌ Ollama is NOT running")
+
+    st.code("ollama serve", language="bash")
+
+    st.info("👉 Open a terminal and run the above command.\nThen refresh this page.")
+
+    st.stop()
+
+
+# =========================================
+# 4. DATA PATH (AUTO)
 # =========================================
 DATA_PATH = "HR Policy"
 
 if not os.path.exists(DATA_PATH):
-    st.error("❌ 'HR Policy' folder not found in project")
+    st.error("❌ 'HR Policy' folder not found in project directory")
     st.stop()
-else:
-    st.success(f"📂 Using data from: {DATA_PATH}")
+
+st.success(f"📂 Using data from: {DATA_PATH}")
+
 
 # =========================================
-# 4. LOAD DOCUMENTS + VECTORSTORE
+# 5. LOAD VECTORSTORE (CACHED)
 # =========================================
 @st.cache_resource
 def load_vectorstore(path):
@@ -56,35 +70,35 @@ def load_vectorstore(path):
             d.metadata["source"] = d.metadata.get("source", tag)
         return docs
 
-    # TXT
+    # Load TXT
     try:
         docs = DirectoryLoader(path, glob="**/*.txt", loader_cls=TextLoader).load()
         documents.extend(add_meta(docs, "txt"))
     except:
         pass
 
-    # DOCX
+    # Load DOCX
     try:
         docs = DirectoryLoader(path, glob="**/*.docx", loader_cls=Docx2txtLoader).load()
         documents.extend(add_meta(docs, "docx"))
     except:
         pass
 
-    # PDF fast
+    # Load PDF (fast)
     try:
         docs = DirectoryLoader(path, glob="**/*.pdf", loader_cls=PyMuPDFLoader).load()
         documents.extend(add_meta(docs, "pdf_fast"))
     except:
         pass
 
-    # PDF OCR fallback
+    # Load PDF OCR fallback
     try:
         docs = DirectoryLoader(path, glob="**/*.pdf", loader_cls=UnstructuredPDFLoader).load()
         documents.extend(add_meta(docs, "pdf_ocr"))
     except:
         pass
 
-    # Fallback if no files found
+    # Fallback if nothing found
     if len(documents) == 0:
         from langchain_core.documents import Document
         documents = [Document(
@@ -93,10 +107,7 @@ def load_vectorstore(path):
         )]
 
     # Split
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     docs = splitter.split_documents(documents)
     docs = [d for d in docs if d.page_content.strip() != ""]
 
@@ -109,8 +120,9 @@ def load_vectorstore(path):
 
     return vectorstore
 
+
 # =========================================
-# 5. BUILD QA CHAIN (NO CACHE ❗)
+# 6. BUILD QA CHAIN (NO CACHE)
 # =========================================
 def build_chain(vectorstore):
 
@@ -146,26 +158,33 @@ Answer:
 
     return qa_chain
 
+
 # =========================================
-# 6. LOAD SYSTEM
+# 7. LOAD SYSTEM
 # =========================================
-with st.spinner("📚 Loading HR documents..."):
+with st.spinner("📚 Indexing HR documents..."):
     vectorstore = load_vectorstore(DATA_PATH)
 
 qa_chain = build_chain(vectorstore)
 
-# =========================================
-# 7. CHAT UI
-# =========================================
-user_query = st.text_input("Ask your HR question:")
 
-if user_query:
+# =========================================
+# 8. CHAT UI
+# =========================================
+query = st.text_input("Ask your HR question:")
+
+if query:
     with st.spinner("🤖 Thinking..."):
-        res = qa_chain.invoke({"query": user_query})
+        try:
+            res = qa_chain.invoke({"query": query})
 
-    st.markdown("### 🧠 Answer")
-    st.write(res["result"])
+            st.markdown("### 🧠 Answer")
+            st.write(res["result"])
 
-    st.markdown("### 📄 Sources")
-    for d in res["source_documents"]:
-        st.write("-", d.metadata.get("source", "HR Policy"))
+            st.markdown("### 📄 Sources")
+            for d in res["source_documents"]:
+                st.write("-", d.metadata.get("source", "HR Policy"))
+
+        except Exception as e:
+            st.error("❌ Failed to get response from Ollama")
+            st.exception(e)
