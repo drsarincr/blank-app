@@ -1,68 +1,125 @@
 import streamlit as st
 import os
+import subprocess
+import threading
+import time
 
-from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import (
+    DirectoryLoader, TextLoader, PyMuPDFLoader,
+    Docx2txtLoader, UnstructuredPDFLoader
+)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
-from langchain_community.llms import HuggingFaceHub
+from langchain_ollama import OllamaLLM
+
 
 # =========================================
-# 1. Load HR Policy
+# 1. START OLLAMA (LOCAL)
 # =========================================
-DATA_PATH = "HR Policy.txt"
+def run_ollama():
+    subprocess.Popen(["ollama", "serve"],
+                     stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
 
-try:
-    loader = TextLoader(DATA_PATH, encoding="utf-8")
-    documents = loader.load()
-except Exception:
-    from langchain_core.documents import Document
-    documents = [Document(
-        page_content="Employees get 20 days leave. Notice period is 30 days.",
-        metadata={"source": "demo"}
-    )]
+@st.cache_resource
+def start_ollama():
+    threading.Thread(target=run_ollama, daemon=True).start()
+    time.sleep(5)
 
-# =========================================
-# 2. Split + Embed
-# =========================================
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,
-    chunk_overlap=100
-)
+start_ollama()
 
-docs = splitter.split_documents(documents)
-docs = [d for d in docs if d.page_content.strip() != ""]
-
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
-
-vectorstore = FAISS.from_documents(docs, embeddings)
-
-retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
 # =========================================
-# 3. LLM (HuggingFace Cloud)
+# 2. UI INPUT
 # =========================================
-llm = HuggingFaceHub(
-    repo_id="google/flan-t5-base",
-    huggingfacehub_api_token=st.secrets["HUGGINGFACEHUB_API_TOKEN"],
-    model_kwargs={"temperature": 0}
-)
+st.title("🤖 HR Chatbot (Ollama - Local Only)")
+
+DATA_PATH = st.text_input("📁 Enter folder path (e.g. /Users/you/HR Policy):")
+
 
 # =========================================
-# 4. Prompt
+# 3. LOAD + PROCESS DOCUMENTS
 # =========================================
-prompt = PromptTemplate(
-    template="""
+@st.cache_resource
+def load_vectorstore(path):
+
+    documents = []
+
+    def add_meta(docs, tag):
+        for d in docs:
+            d.metadata["source"] = d.metadata.get("source", tag)
+        return docs
+
+    # TXT
+    try:
+        docs = DirectoryLoader(path, glob="**/*.txt", loader_cls=TextLoader).load()
+        documents.extend(add_meta(docs, "txt"))
+    except:
+        pass
+
+    # DOCX
+    try:
+        docs = DirectoryLoader(path, glob="**/*.docx", loader_cls=Docx2txtLoader).load()
+        documents.extend(add_meta(docs, "docx"))
+    except:
+        pass
+
+    # PDF fast
+    try:
+        docs = DirectoryLoader(path, glob="**/*.pdf", loader_cls=PyMuPDFLoader).load()
+        documents.extend(add_meta(docs, "pdf_fast"))
+    except:
+        pass
+
+    # PDF OCR fallback
+    try:
+        docs = DirectoryLoader(path, glob="**/*.pdf", loader_cls=UnstructuredPDFLoader).load()
+        documents.extend(add_meta(docs, "pdf_ocr"))
+    except:
+        pass
+
+    # Fallback
+    if len(documents) == 0:
+        from langchain_core.documents import Document
+        documents = [Document(
+            page_content="Employees get 20 days leave. Notice period is 30 days.",
+            metadata={"source": "demo"}
+        )]
+
+    # Split
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    docs = splitter.split_documents(documents)
+    docs = [d for d in docs if d.page_content.strip() != ""]
+
+    # Embeddings
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
+    vectorstore = FAISS.from_documents(docs, embeddings)
+
+    return vectorstore
+
+
+# =========================================
+# 4. BUILD QA CHAIN
+# =========================================
+@st.cache_resource
+def build_chain(vectorstore):
+
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+    llm = OllamaLLM(model="llama3.2")
+
+    prompt = PromptTemplate(
+        template="""
 You are an HR assistant.
 
-Answer the question based ONLY on the context below.
-- Summarize clearly in 2–3 sentences.
-- Do not repeat the context verbatim.
-- If the answer is not in the context, reply exactly: "Not found in HR policy."
+Answer ONLY from the context.
+If not found, say: "Not found in HR policy."
 
 Context:
 {context}
@@ -70,56 +127,45 @@ Context:
 Question:
 {question}
 
-Final Answer:
+Answer:
 """,
-    input_variables=["context", "question"]
-)
+        input_variables=["context", "question"]
+    )
+
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        retriever=retriever,
+        chain_type="stuff",
+        chain_type_kwargs={"prompt": prompt},
+        return_source_documents=True
+    )
+
+    return qa_chain
+
 
 # =========================================
-# 5. QA Chain
+# 5. MAIN LOGIC
 # =========================================
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever,
-    chain_type="stuff",
-    chain_type_kwargs={"prompt": prompt},
-    return_source_documents=True
-)
+if DATA_PATH:
 
-# =========================================
-# 6. Guard
-# =========================================
-def clean_answer(result):
-    answer = result.strip()
+    if not os.path.exists(DATA_PATH):
+        st.error("❌ Path not found")
+        st.stop()
 
-    if not answer:
-        return "Not found in HR policy."
+    with st.spinner("📚 Loading documents..."):
+        vectorstore = load_vectorstore(DATA_PATH)
 
-    if answer.lower().startswith(("context", "you are an hr assistant")):
-        return "Not found in HR policy."
+    qa_chain = build_chain(vectorstore)
 
-    return answer
+    user_query = st.text_input("Ask your HR question:")
 
-# =========================================
-# 7. UI
-# =========================================
-st.title("🤖 HR Chatbot")
-
-user_input = st.text_input("Ask a question about HR policy:")
-
-if user_input:
-    try:
-        res = qa_chain.invoke({"query": user_input})
-
-        answer = clean_answer(res["result"])
+    if user_query:
+        with st.spinner("🤖 Thinking..."):
+            res = qa_chain.invoke({"query": user_query})
 
         st.markdown("### 🧠 Answer")
-        st.write(answer)
+        st.write(res["result"])
 
         st.markdown("### 📄 Sources")
         for d in res["source_documents"]:
-            st.write("-", d.metadata.get("source", "HR Policy"))
-
-    except Exception as e:
-        st.error("Error generating response")
-        st.exception(e)
+            st.write("-", d.metadata.get("source"))
