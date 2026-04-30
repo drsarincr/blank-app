@@ -3,6 +3,7 @@ import os
 import subprocess
 import threading
 import time
+import requests
 
 from langchain_community.document_loaders import (
     DirectoryLoader, TextLoader, PyMuPDFLoader,
@@ -33,12 +34,22 @@ def start_ollama():
 start_ollama()
 
 # =========================================
-# 2. UI TITLE
+# 2. CHECK OLLAMA
+# =========================================
+def check_ollama():
+    try:
+        requests.get("http://localhost:11434", timeout=2)
+        return True
+    except:
+        return False
+
+# =========================================
+# 3. UI
 # =========================================
 st.title("🤖 HR Chatbot (Ollama - Local Only)")
 
 # =========================================
-# 3. AUTO DATA PATH
+# 4. AUTO DATA PATH
 # =========================================
 DATA_PATH = "HR Policy"
 
@@ -49,7 +60,7 @@ else:
     st.success(f"📂 Using data from: {DATA_PATH}")
 
 # =========================================
-# 4. LOAD + VECTOR STORE (CACHED)
+# 5. LOAD DOCUMENTS + VECTORSTORE (CACHED)
 # =========================================
 @st.cache_resource
 def load_vectorstore(path):
@@ -89,7 +100,7 @@ def load_vectorstore(path):
     except:
         pass
 
-    # Fallback if no docs found
+    # Fallback
     if len(documents) == 0:
         from langchain_core.documents import Document
         documents = [Document(
@@ -102,6 +113,7 @@ def load_vectorstore(path):
         chunk_size=500,
         chunk_overlap=100
     )
+
     docs = splitter.split_documents(documents)
     docs = [d for d in docs if d.page_content.strip() != ""]
 
@@ -115,9 +127,13 @@ def load_vectorstore(path):
     return vectorstore
 
 # =========================================
-# 5. BUILD QA CHAIN (NO CACHE ❗)
+# 6. BUILD QA CHAIN (NO CACHE ❗)
 # =========================================
 def build_chain(vectorstore):
+
+    if not check_ollama():
+        st.error("❌ Ollama is not running.\n\nRun:\n\nollama serve")
+        st.stop()
 
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
@@ -152,7 +168,7 @@ Answer:
     return qa_chain
 
 # =========================================
-# 6. LOAD SYSTEM
+# 7. LOAD SYSTEM
 # =========================================
 with st.spinner("📚 Loading HR documents..."):
     vectorstore = load_vectorstore(DATA_PATH)
@@ -160,7 +176,7 @@ with st.spinner("📚 Loading HR documents..."):
 qa_chain = build_chain(vectorstore)
 
 # =========================================
-# 7. CHAT UI
+# 8. CHAT UI
 # =========================================
 user_query = st.text_input("Ask your HR question:")
 
