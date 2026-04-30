@@ -15,7 +15,7 @@ DATA_PATH = "HR Policy"   # adjust if file is HR Policy.txt
 try:
     loader = TextLoader(DATA_PATH)
     documents = loader.load()
-except Exception as e:
+except Exception:
     from langchain_core.documents import Document
     documents = [Document(
         page_content="Employees get 20 days leave. Notice period is 30 days.",
@@ -43,8 +43,10 @@ prompt = PromptTemplate(
     template="""
 You are an HR assistant.
 
-Answer ONLY from the context.
-If not found, say: "Not found in HR policy."
+Use the context below to answer the question concisely.
+- Summarize clearly in 2–3 sentences.
+- Do not repeat the context verbatim.
+- If the answer is not in the context, reply: "Not found in HR policy."
 
 Context:
 {context}
@@ -52,7 +54,7 @@ Context:
 Question:
 {question}
 
-Answer:
+Final Answer:
 """,
     input_variables=["context", "question"]
 )
@@ -73,8 +75,14 @@ user_input = st.text_input("Ask a question about HR policy:")
 
 if user_input:
     res = qa_chain.invoke({"query": user_input})
+    answer = res["result"].strip()
+
+    # Guard: if answer looks like raw context, replace
+    if "Context:" in answer or len(answer.split()) > 120:
+        answer = "Not found in HR policy."
+
     st.markdown("### 🧠 Answer")
-    st.write(res["result"])
+    st.write(answer)
 
     st.markdown("### 📄 Sources")
     for d in res["source_documents"]:
