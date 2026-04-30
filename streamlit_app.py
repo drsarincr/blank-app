@@ -1,5 +1,8 @@
 import streamlit as st
 import os
+import subprocess
+import threading
+import time
 import requests
 
 from langchain_community.document_loaders import (
@@ -15,53 +18,54 @@ from langchain_ollama import OllamaLLM
 
 
 # =========================================
-# 1. CHECK OLLAMA
+# 1. TRY START OLLAMA (BEST EFFORT)
 # =========================================
+def start_ollama():
+    try:
+        subprocess.Popen(["ollama", "serve"],
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        time.sleep(3)
+    except:
+        pass
+
 def check_ollama():
     try:
-        res = requests.get("http://localhost:11434", timeout=2)
-        return res.status_code == 200
+        requests.get("http://localhost:11434", timeout=2)
+        return True
     except:
         return False
+
+start_ollama()
 
 
 # =========================================
 # 2. UI
 # =========================================
-st.set_page_config(page_title="HR Chatbot", layout="centered")
-st.title("🤖 HR Chatbot (Ollama - Local Only)")
+st.title("🤖 HR Chatbot")
 
-
-# =========================================
-# 3. CHECK OLLAMA STATUS
-# =========================================
 if not check_ollama():
-    st.error("❌ Ollama is NOT running")
-
-    st.code("ollama serve", language="bash")
-
-    st.info("👉 Open a terminal and run the above command.\nThen refresh this page.")
-
+    st.error("❌ Ollama not running. This app requires local execution.")
     st.stop()
 
 
 # =========================================
-# 4. DATA PATH (AUTO)
+# 3. DATA PATH (AUTO)
 # =========================================
 DATA_PATH = "HR Policy"
 
 if not os.path.exists(DATA_PATH):
-    st.error("❌ 'HR Policy' folder not found in project directory")
+    st.error("❌ HR Policy folder not found")
     st.stop()
 
-st.success(f"📂 Using data from: {DATA_PATH}")
+st.success(f"📂 Using: {DATA_PATH}")
 
 
 # =========================================
-# 5. LOAD VECTORSTORE (CACHED)
+# 4. LOAD DOCUMENTS
 # =========================================
 @st.cache_resource
-def load_vectorstore(path):
+def load_data(path):
 
     documents = []
 
@@ -70,59 +74,41 @@ def load_vectorstore(path):
             d.metadata["source"] = d.metadata.get("source", tag)
         return docs
 
-    # Load TXT
     try:
         docs = DirectoryLoader(path, glob="**/*.txt", loader_cls=TextLoader).load()
         documents.extend(add_meta(docs, "txt"))
-    except:
-        pass
+    except: pass
 
-    # Load DOCX
     try:
         docs = DirectoryLoader(path, glob="**/*.docx", loader_cls=Docx2txtLoader).load()
         documents.extend(add_meta(docs, "docx"))
-    except:
-        pass
+    except: pass
 
-    # Load PDF (fast)
     try:
         docs = DirectoryLoader(path, glob="**/*.pdf", loader_cls=PyMuPDFLoader).load()
-        documents.extend(add_meta(docs, "pdf_fast"))
-    except:
-        pass
+        documents.extend(add_meta(docs, "pdf"))
+    except: pass
 
-    # Load PDF OCR fallback
-    try:
-        docs = DirectoryLoader(path, glob="**/*.pdf", loader_cls=UnstructuredPDFLoader).load()
-        documents.extend(add_meta(docs, "pdf_ocr"))
-    except:
-        pass
-
-    # Fallback if nothing found
-    if len(documents) == 0:
+    if not documents:
         from langchain_core.documents import Document
         documents = [Document(
             page_content="Employees get 20 days leave. Notice period is 30 days.",
             metadata={"source": "demo"}
         )]
 
-    # Split
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     docs = splitter.split_documents(documents)
-    docs = [d for d in docs if d.page_content.strip() != ""]
 
-    # Embeddings
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
     vectorstore = FAISS.from_documents(docs, embeddings)
-
     return vectorstore
 
 
 # =========================================
-# 6. BUILD QA CHAIN (NO CACHE)
+# 5. BUILD CHAIN
 # =========================================
 def build_chain(vectorstore):
 
@@ -134,7 +120,7 @@ def build_chain(vectorstore):
         template="""
 You are an HR assistant.
 
-Answer ONLY from the context.
+Answer ONLY from context.
 If not found, say: "Not found in HR policy."
 
 Context:
@@ -148,43 +134,35 @@ Answer:
         input_variables=["context", "question"]
     )
 
-    qa_chain = RetrievalQA.from_chain_type(
+    return RetrievalQA.from_chain_type(
         llm=llm,
         retriever=retriever,
-        chain_type="stuff",
         chain_type_kwargs={"prompt": prompt},
         return_source_documents=True
     )
 
-    return qa_chain
-
 
 # =========================================
-# 7. LOAD SYSTEM
+# 6. INIT
 # =========================================
-with st.spinner("📚 Indexing HR documents..."):
-    vectorstore = load_vectorstore(DATA_PATH)
+with st.spinner("📚 Loading data..."):
+    vectorstore = load_data(DATA_PATH)
 
 qa_chain = build_chain(vectorstore)
 
 
 # =========================================
-# 8. CHAT UI
+# 7. CHAT UI
 # =========================================
-query = st.text_input("Ask your HR question:")
+query = st.text_input("Ask HR question:")
 
 if query:
     with st.spinner("🤖 Thinking..."):
-        try:
-            res = qa_chain.invoke({"query": query})
+        res = qa_chain.invoke({"query": query})
 
-            st.markdown("### 🧠 Answer")
-            st.write(res["result"])
+    st.write("### 🧠 Answer")
+    st.write(res["result"])
 
-            st.markdown("### 📄 Sources")
-            for d in res["source_documents"]:
-                st.write("-", d.metadata.get("source", "HR Policy"))
-
-        except Exception as e:
-            st.error("❌ Failed to get response from Ollama")
-            st.exception(e)
+    st.write("### 📄 Sources")
+    for d in res["source_documents"]:
+        st.write("-", d.metadata.get("source"))
