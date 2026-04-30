@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import requests
 
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -7,7 +8,22 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
+
+# LLM विकल्प
 from langchain_community.llms import Ollama
+from langchain_community.llms import HuggingFaceHub
+
+
+# =========================================
+# 0. Check if Ollama is running
+# =========================================
+def ollama_available():
+    try:
+        requests.get("http://localhost:11434", timeout=2)
+        return True
+    except:
+        return False
+
 
 # =========================================
 # 1. Load HR Policy file
@@ -45,17 +61,25 @@ embeddings = HuggingFaceEmbeddings(
 
 vectorstore = FAISS.from_documents(docs, embeddings)
 
-retriever = vectorstore.as_retriever(
-    search_kwargs={"k": 5}
-)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+
 
 # =========================================
-# 3. LLM (Ollama)
+# 3. LLM Selection (AUTO SWITCH)
 # =========================================
-llm = Ollama(
-    model="llama3",   # make sure: ollama pull llama3
-    temperature=0
-)
+if ollama_available():
+    llm = Ollama(
+        model="llama3",
+        temperature=0
+    )
+    st.success("🟢 Using Ollama (local)")
+else:
+    llm = HuggingFaceHub(
+        repo_id="google/flan-t5-base",
+        model_kwargs={"temperature": 0}
+    )
+    st.warning("🟡 Ollama not found → using cloud model")
+
 
 # =========================================
 # 4. Prompt
@@ -80,6 +104,7 @@ Final Answer:
     input_variables=["context", "question"]
 )
 
+
 # =========================================
 # 5. QA Chain
 # =========================================
@@ -90,6 +115,7 @@ qa_chain = RetrievalQA.from_chain_type(
     chain_type_kwargs={"prompt": prompt},
     return_source_documents=True
 )
+
 
 # =========================================
 # 6. Guard function
@@ -105,22 +131,27 @@ def clean_answer(result):
 
     return answer
 
+
 # =========================================
-# 7. Streamlit UI
+# 7. UI
 # =========================================
 st.title("🤖 HR Chatbot")
 
 user_input = st.text_input("Ask a question about HR policy:")
 
 if user_input:
-    # ✅ IMPORTANT FIX → use "query"
-    res = qa_chain.invoke({"query": user_input})
+    try:
+        res = qa_chain.invoke({"query": user_input})  # ✅ correct key
 
-    answer = clean_answer(res["result"])
+        answer = clean_answer(res["result"])
 
-    st.markdown("### 🧠 Answer")
-    st.write(answer)
+        st.markdown("### 🧠 Answer")
+        st.write(answer)
 
-    st.markdown("### 📄 Sources")
-    for d in res["source_documents"]:
-        st.write("-", d.metadata.get("source", "HR Policy"))
+        st.markdown("### 📄 Sources")
+        for d in res["source_documents"]:
+            st.write("-", d.metadata.get("source", "HR Policy"))
+
+    except Exception as e:
+        st.error("❌ LLM connection failed. Check Ollama or API setup.")
+        st.exception(e)
