@@ -240,4 +240,4 @@ if prompt := st.chat_input("Ask about HR policies..."):
                     })
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
-                    st.info("Please try rephrasing
+                    st.info("Please try rephrasing your question.")
