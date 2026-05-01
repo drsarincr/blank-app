@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 
-# Essential LCEL imports
+# Modern LangChain imports (Avoids legacy chains)
 from langchain_ollama import OllamaLLM
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -11,87 +11,108 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
-st.set_page_config(page_title="HR Policy Assistant", layout="centered")
-st.title("📄 HR Policy Bot")
+st.set_page_config(page_title="HR AI Assistant", layout="centered")
+st.title("📄 HR Policy Chatbot")
 
-# --- SETTINGS ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("Connection")
-    ollama_url = st.text_input("Ollama URL", value="http://localhost:11434")
+    st.header("Configuration")
+    st.info("Since this is hosted on Streamlit Cloud, you must provide a public URL to your Ollama instance (e.g., via Ngrok).")
+    ollama_url = st.text_input("Ollama Endpoint URL", value="http://localhost:11434")
 
-# --- 1. SETUP RETRIEVER ---
+# --- 1. DATA LOADING LOGIC ---
 @st.cache_resource
-def get_retriever():
-    # Use absolute path to avoid ambiguity
-    base_path = os.path.dirname(__file__)
-    data_dir = os.path.join(base_path, "HR Policy")
+def init_retriever():
+    # Look for the path in the current directory
+    data_path = os.path.join(os.getcwd(), "HR Policy")
     
-    # Check if the path exists AND is a directory
-    if not os.path.exists(data_dir):
-        st.error(f"❌ Path not found: {data_dir}. Please ensure a FOLDER named 'HR Policy' exists in your GitHub repo.")
+    if not os.path.exists(data_path):
+        st.error(f"❌ Path not found: {data_path}. Please check your GitHub repo.")
         return None
-        
-    if not os.path.isdir(data_dir):
-        st.error(f"❌ '{data_dir}' is a file, but we need a FOLDER. Please rename or move your file into a folder.")
-        return None
-    
+
     try:
-        # Load .txt files from the directory
-        loader = DirectoryLoader(data_dir, glob="*.txt", loader_cls=TextLoader)
-        docs = loader.load()
-        
-        if not docs:
-            st.warning("⚠️ Folder found, but no .txt files were inside.")
-            return None
+        # Detect if 'HR Policy' is a folder or a file
+        if os.path.isdir(data_path):
+            st.toast("Loading from folder: HR Policy")
+            loader = DirectoryLoader(data_path, glob="*.txt", loader_cls=TextLoader)
+        else:
+            st.toast("Loading from single file: HR Policy")
+            loader = TextLoader(data_path)
             
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-        splits = splitter.split_documents(docs)
+        documents = loader.load()
         
+        if not documents:
+            st.warning("No content found in the selected path.")
+            return None
+
+        # Split text into chunks
+        splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
+        chunks = splitter.split_documents(documents)
+        
+        # Initialize Embeddings
         embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        vectorstore = FAISS.from_documents(splits, embeddings)
+        
+        # Build Vector Store
+        vectorstore = FAISS.from_documents(chunks, embeddings)
         return vectorstore.as_retriever(search_kwargs={"k": 3})
+        
     except Exception as e:
-        st.error(f"Error loading documents: {e}")
+        st.error(f"Processing Error: {e}")
         return None
 
-retriever = get_retriever()
+retriever = init_retriever()
 
-# --- 2. RAG LOGIC ---
+# --- 2. RAG CHAIN LOGIC (LCEL) ---
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
-prompt = ChatPromptTemplate.from_template("""
-You are an HR assistant. Answer based ONLY on the context below. 
-If not in context, say "Policy not found."
+template = """
+You are an HR assistant. Answer the question using ONLY the context provided below. 
+If the information is not in the context, strictly say: "Not found in HR policy."
 
 Context:
 {context}
 
 Question: {question}
-Answer:
-""")
+Answer:"""
 
-# --- 3. CHAT UI ---
+prompt = ChatPromptTemplate.from_template(template)
+
+# --- 3. CHAT INTERFACE ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for m in st.session_state.messages:
-    st.chat_message(m["role"]).write(m["content"])
+# Show history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-if user_query := st.chat_input():
+# User input
+if user_query := st.chat_input("Ask a policy question..."):
     st.session_state.messages.append({"role": "user", "content": user_query})
-    st.chat_message("user").write(user_query)
+    with st.chat_message("user"):
+        st.markdown(user_query)
 
     if retriever:
         try:
+            # Initialize Ollama
             llm = OllamaLLM(model="llama3.2", base_url=ollama_url)
+            
+            # Create the LCEL Pipe
             chain = (
                 {"context": retriever | format_docs, "question": RunnablePassthrough()}
-                | prompt | llm | StrOutputParser()
+                | prompt
+                | llm
+                | StrOutputParser()
             )
+
             with st.chat_message("assistant"):
-                response = chain.invoke(user_query)
-                st.write(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                with st.spinner("Searching policies..."):
+                    response = chain.invoke(user_query)
+                    st.markdown(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    
         except Exception as e:
-            st.error(f"Ollama Connection Error. Is it running at {ollama_url}?")
+            st.error(f"Connection Error: Could not connect to Ollama at {ollama_url}. {e}")
+    else:
+        st.warning("Retriever not initialized. Please fix the data path issues.")
