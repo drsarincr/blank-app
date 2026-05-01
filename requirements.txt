@@ -6,3 +6,5 @@ langchain-core
 faiss-cpu
 sentence-transformers
 ctransformers
+streamlit
+llama-cpp-python
