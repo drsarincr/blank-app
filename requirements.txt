@@ -29,3 +29,10 @@ unstructured
 pytesseract
 pdf2image
 requests==2.33.1
+streamlit
+langchain
+langchain-ollama
+langchain-community
+langchain-core
+faiss-cpu
+sentence-transformers
