@@ -1,42 +1,90 @@
 import streamlit as st
 import os
+import re
+from langchain_groq import ChatGroq
 from langchain_community.document_loaders import TextLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import CTransformers
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
-st.title("📄 Simple HR Bot")
+st.set_page_config(page_title="HR AI Assistant", layout="centered")
+st.title("⚡ HR Policy AI (Groq Powered)")
 
-# 1. Load Data
+# --- 1. DATA LOADING & CLEANING ---
 @st.cache_resource
-def get_data():
-    data_path = "HR Policy"
-    if not os.path.exists(data_path): return None
-    loader = TextLoader(data_path)
-    docs = loader.load()
-    # We take only the first 200 characters to skip your list of numbers
-    docs[0].page_content = docs[0].page_content[:200]
+def init_retriever():
+    file_path = "HR Policy"
+    if not os.path.exists(file_path):
+        st.error(f"File '{file_path}' not found in GitHub!")
+        return None
     
+    loader = TextLoader(file_path)
+    docs = loader.load()
+    
+    # Noise Filter: Removes long lists of numbers (18, 19, 20...)
+    docs[0].page_content = re.sub(r'(\d+\s+){5,}', '', docs[0].page_content)
+    
+    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=50)
+    splits = splitter.split_documents(docs)
+    
+    # This runs on Streamlit CPU (Low memory usage)
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    return FAISS.from_documents(docs, embeddings).as_retriever()
+    return FAISS.from_documents(splits, embeddings).as_retriever(search_kwargs={"k": 2})
 
-# 2. Load the TINIEST model possible (Qwen 0.5B)
+# --- 2. SECURE LLM SETUP ---
 @st.cache_resource
-def get_llm():
-    return CTransformers(
-        model="Qwen/Qwen2-0.5B-Instruct-GGUF",
-        model_file="qwen2-0.5b-instruct-q4_k_m.gguf",
-        model_type="gpt2"
+def load_llm():
+    # Pulls the hidden key from Streamlit Secrets
+    return ChatGroq(
+        api_key=st.secrets["GROQ_API_KEY"],
+        model_name="llama-3.3-70b-versatile",
+        temperature=0.1
     )
 
-retriever = get_data()
-llm = get_llm()
+retriever = init_retriever()
+llm = load_llm()
 
-if query := st.chat_input("Question:"):
+# --- 3. RAG PROMPT ---
+prompt = ChatPromptTemplate.from_template("""
+You are a professional HR assistant. 
+Answer the question using ONLY the context provided.
+Provide a concise answer in exactly 3 bullet points.
+
+Context: {context}
+Question: {question}
+Answer:""")
+
+def format_docs(docs):
+    return "\n\n".join(d.page_content for d in docs)
+
+# --- 4. CHAT INTERFACE ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg["content"])
+
+if query := st.chat_input("Ask a policy question (e.g., How many leaves?)"):
+    st.session_state.messages.append({"role": "user", "content": query})
     st.chat_message("user").write(query)
-    context = retriever.get_relevant_documents(query)[0].page_content
-    prompt = f"Context: {context}\nQuestion: {query}\nAnswer in 1 sentence:"
     
-    with st.chat_message("assistant"):
-        response = llm(prompt)
-        st.write(response)
+    if retriever and llm:
+        # Create the LCEL Pipe
+        chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt 
+            | llm 
+            | StrOutputParser()
+        )
+        
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing HR Policy..."):
+                try:
+                    response = chain.invoke(query)
+                    st.write(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    st.error(f"Error: {e}")
