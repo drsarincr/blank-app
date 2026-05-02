@@ -1,11 +1,3 @@
-streamlit
-langchain
-langchain-core
-langchain-community
-langchain-text-splitters
-langchain-classic
-sentence-transformers==2.6.1
-docarray
 streamlit>=1.35.0
 langchain>=0.2.0
 langchain-core>=0.2.0
