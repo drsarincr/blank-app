@@ -8,3 +8,11 @@ faiss-cpu>=1.8.0
 sentence-transformers>=3.0.0
 huggingface-hub>=0.23.0
  
+streamlit
+langchain-core
+langchain-text-splitters
+langchain-community
+langchain-classic
+langchain-groq
+sentence-transformers
+faiss-cpu
