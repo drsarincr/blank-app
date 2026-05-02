@@ -1,16 +1,14 @@
 import streamlit as st
-import os
 from groq import Groq
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import DocArrayInMemorySearch
-from langchain_core.prompts import PromptTemplate
 
 
 # =========================================
-# PAGE CONFIG
+# PAGE SETUP
 # =========================================
 st.set_page_config(page_title="HR Policy Bot")
 st.title("🤖 HR Policy Chatbot")
@@ -28,7 +26,7 @@ client = Groq(api_key=api_key)
 
 
 # =========================================
-# HR POLICY
+# HR POLICY (IN-MEMORY)
 # =========================================
 hr_policy = """
 Employees are entitled to 20 days of paid leave annually including casual, sick, and earned leave.
@@ -50,13 +48,16 @@ Managers can approve or reject leave based on workload.
 
 
 # =========================================
-# BUILD RAG
+# BUILD RAG PIPELINE
 # =========================================
 @st.cache_resource
-def build_rag():
+def build_retriever():
     docs = [Document(page_content=hr_policy)]
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=300,
+        chunk_overlap=50
+    )
     split_docs = splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(
@@ -68,16 +69,17 @@ def build_rag():
     return vectorstore.as_retriever(search_kwargs={"k": 3})
 
 
-retriever = build_rag()
+retriever = build_retriever()
 
 
 # =========================================
-# PROMPT
+# PROMPT TEMPLATE
 # =========================================
-prompt_template = """
+def build_prompt(context, question):
+    return f"""
 You are an HR assistant.
 
-Answer only from the context.
+Answer ONLY from the context.
 If not found, say: Not found in HR policy.
 
 Context:
@@ -91,14 +93,14 @@ Answer:
 
 
 # =========================================
-# GROQ CALL (NO LANGCHAIN WRAPPER)
+# GROQ LLM CALL
 # =========================================
 def ask_llm(context, question):
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
             {"role": "system", "content": "You are an HR assistant."},
-            {"role": "user", "content": f"{prompt_template.format(context=context, question=question)}"}
+            {"role": "user", "content": build_prompt(context, question)}
         ],
         temperature=0
     )
@@ -112,20 +114,29 @@ def ask_llm(context, question):
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Display previous messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+# Input box
 query = st.chat_input("Ask about HR policy...")
 
 if query:
+    # Show user message
     st.session_state.messages.append({"role": "user", "content": query})
 
+    with st.chat_message("user"):
+        st.markdown(query)
+
+    # Retrieve relevant chunks
     docs = retriever.get_relevant_documents(query)
     context = "\n\n".join([d.page_content for d in docs])
 
+    # Generate answer
     answer = ask_llm(context, query)
 
+    # Show assistant message
     with st.chat_message("assistant"):
         st.markdown(answer)
 
