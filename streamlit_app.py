@@ -100,11 +100,16 @@ Answer:
     # =========================================
     # 7. CHAT INTERFACE
     # =========================================
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
     user_q = st.text_input("Your question:")
     if st.button("Ask"):
         if user_q.strip():
             try:
                 res = qa_chain.invoke({"query": user_q})
+                st.session_state.chat_history.append((user_q, res["result"]))
+
                 st.subheader("🧠 Answer")
                 st.write(res["result"])
                 st.subheader("📄 Sources")
@@ -112,5 +117,12 @@ Answer:
                     st.write("-", d.metadata.get("source"))
             except Exception as e:
                 st.error(f"Error: {e}")
+
+    # Show chat history
+    if st.session_state.chat_history:
+        st.subheader("💬 Chat History")
+        for q, a in st.session_state.chat_history:
+            st.write(f"**You:** {q}")
+            st.write(f"**Bot:** {a}")
 else:
     st.warning("Please enter your Groq API key to start.")
