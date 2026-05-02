@@ -3,6 +3,6 @@ langchain-core
 langchain-text-splitters
 langchain-community
 langchain-classic
-langchain-groq
 sentence-transformers
 faiss-cpu
+git+https://github.com/langchain-ai/langchain-groq.git
