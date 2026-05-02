@@ -1,49 +1,17 @@
+# =========================================
+# STREAMLIT HR CHATBOT APP
+# =========================================
 import streamlit as st
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
+from langchain_classic.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
 
 # =========================================
-# PAGE CONFIG
-# =========================================
-st.set_page_config(
-    page_title="HR Policy Chatbot",
-    page_icon="🤖",
-    layout="centered"
-)
-
-st.title("🤖 HR Policy Chatbot")
-st.caption("Powered by Groq LLM + FAISS + LangChain")
-
-# =========================================
-# SIDEBAR — API KEY INPUT
-# =========================================
-with st.sidebar:
-    st.header("🔑 Configuration")
-    groq_api_key = st.text_input(
-        "Enter your Groq API Key",
-        type="password",
-        placeholder="gsk_...",
-        help="Get your free API key at https://console.groq.com"
-    )
-    st.markdown("---")
-    st.markdown("**How to get a Groq API Key:**")
-    st.markdown("1. Go to [console.groq.com](https://console.groq.com)")
-    st.markdown("2. Sign up / Log in")
-    st.markdown("3. Navigate to API Keys")
-    st.markdown("4. Create and copy your key")
-    st.markdown("---")
-    st.markdown("**Models tried (auto-fallback):**")
-    st.markdown("- llama-3.1-8b-instant")
-    st.markdown("- mixtral-8x7b-32768")
-    st.markdown("- gemma-7b-it")
-
-# =========================================
-# HR POLICY TEXT
+# 1. HR POLICY (SELF-CONTAINED)
 # =========================================
 hr_policy = """
 The company provides a structured leave policy to ensure employee well-being while maintaining operational efficiency.
@@ -61,125 +29,88 @@ Employees must ensure proper work handover before taking leave. HR may revise po
 """
 
 # =========================================
-# CACHED SETUP (only re-runs if policy changes)
+# STREAMLIT UI
 # =========================================
-@st.cache_resource(show_spinner="📚 Building vector store...")
-def build_retriever():
+st.title("🤖 HR Policy Chatbot")
+st.write("Ask questions about the HR leave policy.")
+
+# API key input
+api_key = st.text_input("Enter your Groq API key:", type="password")
+
+if api_key:
+    # =========================================
+    # 2. DOCUMENT + SPLIT
+    # =========================================
     documents = [Document(page_content=hr_policy, metadata={"source": "internal_policy"})]
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     docs = splitter.split_documents(documents)
+
+    # =========================================
+    # 3. EMBEDDINGS + FAISS
+    # =========================================
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vectorstore = FAISS.from_documents(docs, embeddings)
-    return vectorstore.as_retriever(search_kwargs={"k": 3})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-# =========================================
-# LLM LOADER WITH AUTO-FALLBACK
-# =========================================
-def get_working_llm(api_key: str):
-    models = [
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
-        "gemma-7b-it"
-    ]
-    for model in models:
-        try:
-            llm = ChatGroq(model=model, temperature=0, groq_api_key=api_key)
-            llm.invoke("test")
-            return llm, model
-        except Exception:
-            continue
-    raise RuntimeError("❌ No working Groq models available. Please check your API key.")
+    # =========================================
+    # 4. SAFE GROQ MODEL LOADER
+    # =========================================
+    def get_working_llm():
+        models = ["llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma-7b-it"]
+        for m in models:
+            try:
+                llm = ChatGroq(model=m, temperature=0, groq_api_key=api_key)
+                llm.invoke("test")  # quick check
+                return llm
+            except Exception:
+                continue
+        raise RuntimeError("No working Groq models available.")
 
-# =========================================
-# PROMPT TEMPLATE
-# =========================================
-prompt = PromptTemplate(
-    template="""
+    llm = get_working_llm()
+
+    # =========================================
+    # 5. PROMPT
+    # =========================================
+    prompt = PromptTemplate(
+        template="""
 You are an HR assistant.
 - Give clear and concise answers
 - Use bullet points when summarizing
 - Answer ONLY from the context
 - If not found, say: "Not found in HR policy."
-
 Context:
 {context}
-
 Question:
 {question}
-
 Answer:
 """,
-    input_variables=["context", "question"]
-)
+        input_variables=["context", "question"]
+    )
 
-# =========================================
-# MAIN CHAT UI
-# =========================================
-if not groq_api_key:
-    st.info("👈 Please enter your **Groq API Key** in the sidebar to start chatting.")
-    st.stop()
+    # =========================================
+    # 6. RAG CHAIN
+    # =========================================
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        retriever=retriever,
+        chain_type_kwargs={"prompt": prompt},
+        return_source_documents=True
+    )
 
-# Initialize chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# Build retriever (cached)
-retriever = build_retriever()
-
-# Load LLM
-if "llm_model" not in st.session_state or "llm" not in st.session_state:
-    with st.spinner("🔌 Connecting to Groq..."):
-        try:
-            llm, model_name = get_working_llm(groq_api_key)
-            st.session_state.llm = llm
-            st.session_state.llm_model = model_name
-            st.success(f"✅ Connected using model: `{model_name}`")
-        except RuntimeError as e:
-            st.error(str(e))
-            st.stop()
-
-# Build QA chain
-qa_chain = RetrievalQA.from_chain_type(
-    llm=st.session_state.llm,
-    retriever=retriever,
-    chain_type_kwargs={"prompt": prompt},
-    return_source_documents=True
-)
-
-# Display chat history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-# Chat input
-if user_input := st.chat_input("Ask about HR policies... (e.g. How many sick leaves do I get?)"):
-    # Show user message
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.markdown(user_input)
-
-    # Get answer
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+    # =========================================
+    # 7. CHAT INTERFACE
+    # =========================================
+    user_q = st.text_input("Your question:")
+    if st.button("Ask"):
+        if user_q.strip():
             try:
-                result = qa_chain.invoke({"query": user_input})
-                answer = result["result"]
-                sources = list({d.metadata.get("source", "unknown") for d in result["source_documents"]})
-
-                st.markdown(answer)
-                st.caption(f"📄 Source: `{', '.join(sources)}`")
-
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer
-                })
+                res = qa_chain.invoke({"query": user_q})
+                st.subheader("🧠 Answer")
+                st.write(res["result"])
+                st.subheader("📄 Sources")
+                for d in res["source_documents"]:
+                    st.write("-", d.metadata.get("source"))
             except Exception as e:
-                err_msg = f"❌ Error: {str(e)}"
-                st.error(err_msg)
-                st.session_state.messages.append({"role": "assistant", "content": err_msg})
-
-# Clear chat button
-if st.session_state.messages:
-    if st.button("🗑️ Clear Chat"):
-        st.session_state.messages = []
-        st.rerun()
+                st.error(f"Error: {e}")
+else:
+    st.warning("Please enter your Groq API key to start.")
