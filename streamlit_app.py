@@ -1,18 +1,11 @@
 import streamlit as st
 from groq import Groq
 
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import DocArrayInMemorySearch
-
-
 # =========================================
-# PAGE SETUP
+# PAGE CONFIG
 # =========================================
 st.set_page_config(page_title="HR Policy Bot")
 st.title("🤖 HR Policy Chatbot")
-
 
 # =========================================
 # API KEY INPUT
@@ -20,124 +13,95 @@ st.title("🤖 HR Policy Chatbot")
 api_key = st.text_input("Enter Groq API Key", type="password")
 
 if not api_key:
+    st.warning("Enter your Groq API key to continue")
     st.stop()
 
 client = Groq(api_key=api_key)
 
-
 # =========================================
-# HR POLICY (IN-MEMORY)
+# HR POLICY (LONG TEXT)
 # =========================================
 hr_policy = """
-Employees are entitled to 20 days of paid leave annually including casual, sick, and earned leave.
-Casual leave is 8 days, sick leave is 7 days with medical proof if more than 2 days.
-Earned leave can be carried forward up to 30 days.
+The company provides employees with 20 days of paid leave annually, including casual, sick, and earned leave.
+Casual leave is limited to 8 days per year and is used for personal reasons.
+Sick leave is 7 days per year and requires medical proof if taken for more than 2 consecutive days.
+Earned leave accumulates over time and can be carried forward up to 30 days.
 
-Leave must be applied 3 days in advance. Emergency leave must be informed immediately.
+Employees must apply for leave at least 3 days in advance.
+Emergency leave must be communicated immediately.
 
-Maternity leave is 26 weeks. Paternity leave is 5 days.
+Maternity leave is 26 weeks as per law.
+Paternity leave is 5 days.
 
-Public holidays are separate. Working on holidays gives compensatory off.
+Public holidays are separate from leave balances.
+Working on holidays provides compensatory leave.
 
-Earned leave can be encashed. Casual and sick leave cannot.
+Earned leave can be encashed during resignation.
+Casual and sick leave cannot be encashed.
 
-Notice period is 30 days. Leave during notice is discouraged.
+A notice period of 30 days is required when resigning.
+Leave during the notice period is discouraged.
 
-Managers can approve or reject leave based on workload.
+Managers may approve or reject leave based on business needs.
+Misuse of leave policy can result in disciplinary action.
 """
 
-
 # =========================================
-# BUILD RAG PIPELINE
-# =========================================
-@st.cache_resource
-def build_retriever():
-    docs = [Document(page_content=hr_policy)]
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300,
-        chunk_overlap=50
-    )
-    split_docs = splitter.split_documents(docs)
-
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-
-    vectorstore = DocArrayInMemorySearch.from_documents(split_docs, embeddings)
-
-    return vectorstore.as_retriever(search_kwargs={"k": 3})
-
-
-retriever = build_retriever()
-
-
-# =========================================
-# PROMPT TEMPLATE
-# =========================================
-def build_prompt(context, question):
-    return f"""
-You are an HR assistant.
-
-Answer ONLY from the context.
-If not found, say: Not found in HR policy.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:
-"""
-
-
-# =========================================
-# GROQ LLM CALL
-# =========================================
-def ask_llm(context, question):
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": "You are an HR assistant."},
-            {"role": "user", "content": build_prompt(context, question)}
-        ],
-        temperature=0
-    )
-
-    return response.choices[0].message.content
-
-
-# =========================================
-# CHAT UI
+# CHAT MEMORY
 # =========================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display previous messages
+# Display chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Input box
+# =========================================
+# USER INPUT
+# =========================================
 query = st.chat_input("Ask about HR policy...")
 
 if query:
-    # Show user message
+    # Save user message
     st.session_state.messages.append({"role": "user", "content": query})
 
     with st.chat_message("user"):
         st.markdown(query)
 
-    # Retrieve relevant chunks
-    docs = retriever.get_relevant_documents(query)
-    context = "\n\n".join([d.page_content for d in docs])
-
-    # Generate answer
-    answer = ask_llm(context, query)
-
-    # Show assistant message
+    # =========================================
+    # GROQ RESPONSE (NO LANGCHAIN)
+    # =========================================
     with st.chat_message("assistant"):
-        st.markdown(answer)
+        with st.spinner("Thinking..."):
 
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                temperature=0,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an HR assistant. Answer only using the given policy."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""
+HR POLICY:
+{hr_policy}
+
+QUESTION:
+{query}
+
+Answer clearly and concisely.
+If not found, say: Not found in HR policy.
+"""
+                    }
+                ]
+            )
+
+            answer = response.choices[0].message.content
+
+            st.markdown(answer)
+
+    # Save assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
